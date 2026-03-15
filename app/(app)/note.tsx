@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { useEffect, useState, useRef } from 'react';
+import { View, TextInput, Text, TouchableOpacity, StyleSheet, Alert, useColorScheme } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useDebouncedCallback } from 'use-debounce';
 import { saveNote, deleteNote, getNoteById } from '@/stores/noteStore';
+import { Colors, Theme } from '../../constants/theme';
+import * as Haptics from 'expo-haptics';
 
 type Note = {
   id: string;
@@ -9,83 +13,111 @@ type Note = {
   content: string;
   created: string;
   updated: string;
-}
+};
 
 export default function NoteScreen() {
+  const scheme = useColorScheme();
+  const colors = Colors[scheme ?? 'light'];
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const isNew = id === 'new';
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const noteId = useRef<string>(id);
 
   useEffect(() => {
     if (!isNew) {
       getNoteById(id).then((note: Note) => {
-        if (note) {
-          setTitle(note.title);
-          setContent(note.content);
-        }
+        if (note) { setTitle(note.title); setContent(note.content); }
       });
     }
   }, [id, isNew]);
 
-  const handleSave = async () => {
-    setSaving(true);
+  const debouncedSave = useDebouncedCallback(async (t: string, c: string) => {
+    if (!t && !c) return;
+    setStatus('saving');
     try {
-      await saveNote(id, title, content);
-      router.back();
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    } finally {
-      setSaving(false);
+      const result = await saveNote(noteId.current, t, c);
+      if (isNew) noteId.current = result.id;
+      setStatus('saved');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setTimeout(() => setStatus('idle'), 2000);
+    } catch {
+      setStatus('idle');
     }
+  }, 1500);
+
+  const handleTitleChange = (val: string) => {
+    setTitle(val);
+    debouncedSave(val, content);
+  };
+
+  const handleContentChange = (val: string) => {
+    setContent(val);
+    debouncedSave(title, val);
   };
 
   const handleDelete = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     Alert.alert('Delete Note', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
-        await deleteNote(id);
+        await deleteNote(noteId.current);
         router.back();
       }},
     ]);
   };
 
+  const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background, paddingTop: 60 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+      paddingHorizontal: Theme.spacing.lg, marginBottom: Theme.spacing.md,
+      borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: Theme.spacing.md },
+    backBtn: { flexDirection: 'row', alignItems: 'center', gap: Theme.spacing.xs },
+    backText: { fontSize: Theme.font.md, color: colors.accent, fontWeight: '500' },
+    actions: { flexDirection: 'row', alignItems: 'center', gap: Theme.spacing.sm },
+    status: { flexDirection: 'row', alignItems: 'center', gap: Theme.spacing.xs, color: colors.accent },
+    statusText: { fontSize: Theme.font.xs, color: colors.accent },
+    deleteBtn: { backgroundColor: colors.danger, paddingHorizontal: Theme.spacing.md,
+      paddingVertical: Theme.spacing.xs + 2, borderRadius: Theme.radius.full,
+      flexDirection: 'row', alignItems: 'center', gap: Theme.spacing.xs },
+    deleteText: { color: '#fff', fontWeight: '600', fontSize: Theme.font.sm },
+    titleInput: { fontSize: Theme.font.xxl, fontWeight: '800', paddingHorizontal: Theme.spacing.lg,
+      paddingTop: Theme.spacing.lg, marginBottom: Theme.spacing.sm,
+      color: colors.primary, letterSpacing: -0.5 },
+    divider: { height: 1, backgroundColor: colors.border, marginHorizontal: Theme.spacing.lg, marginBottom: Theme.spacing.md },
+    contentInput: { flex: 1, fontSize: Theme.font.md, paddingHorizontal: Theme.spacing.lg,
+      lineHeight: 24, color: colors.primary, textAlignVertical: 'top' },
+  });
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.back}>← Back</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={colors.accent} />
+          <Text style={styles.backText}>Notes</Text>
         </TouchableOpacity>
         <View style={styles.actions}>
+          <Text style={styles.status}>Autosave enabled</Text>
+          {status === 'saving' && <Text style={styles.statusText}>Saving...</Text>}
+          {status === 'saved' && <Text style={styles.statusText}>✓ Saved</Text>}
           {!isNew && (
             <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+              <Ionicons name="trash-outline" size={14} color="#fff" />
               <Text style={styles.deleteText}>Delete</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={handleSave} style={styles.saveBtn} disabled={saving}>
-            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save</Text>}
-          </TouchableOpacity>
         </View>
       </View>
+
       <TextInput style={styles.titleInput} placeholder="Title" value={title}
-        onChangeText={setTitle} placeholderTextColor="#ccc" />
+        onChangeText={handleTitleChange} placeholderTextColor={colors.muted} />
+      <View style={styles.divider} />
       <TextInput style={styles.contentInput} placeholder="Start writing..." value={content}
-        onChangeText={setContent} multiline textAlignVertical="top" placeholderTextColor="#ccc" />
+        onChangeText={handleContentChange} multiline textAlignVertical="top"
+        placeholderTextColor={colors.muted} />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 16 },
-  back: { fontSize: 16, color: '#000' },
-  actions: { flexDirection: 'row', gap: 8 },
-  saveBtn: { backgroundColor: '#000', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
-  saveText: { color: '#fff', fontWeight: '600' },
-  deleteBtn: { backgroundColor: '#ff3b30', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
-  deleteText: { color: '#fff', fontWeight: '600' },
-  titleInput: { fontSize: 22, fontWeight: 'bold', paddingHorizontal: 20, marginBottom: 12, color: '#000' },
-  contentInput: { flex: 1, fontSize: 16, paddingHorizontal: 20, lineHeight: 24, color: '#000' },
-});

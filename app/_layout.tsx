@@ -1,5 +1,5 @@
-import { Stack } from 'expo-router';
 import 'react-native-event-source';
+import { Stack } from 'expo-router';
 
 export default function RootLayout() {
   return (
